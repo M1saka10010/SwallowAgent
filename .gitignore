@@ -1,0 +1,12 @@
+# 编译产物
+*.exe
+swallow-agent
+/swallow-agent
+
+# 本地配置（含密钥，勿提交）
+config.yaml
+config.*.yaml
+!config.yaml.example
+
+# 其他
+*.log

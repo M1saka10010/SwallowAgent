@@ -1,0 +1,20 @@
+# 磁盘目录（为空则采集根目录 /）
+# Linux 示例：
+#   - /
+#   - /data
+paths:
+  - C:/
+  - D:/
+# 网卡名称（为空则聚合所有网卡）
+# 示例：
+#   - eth0
+#   - en0
+interfaceNames:
+# 使用情况采集间隔（秒），必须大于 0；系统信息按此间隔的 20 倍上报
+interval: 3
+# 回报地址，必须使用 ws:// 或 wss://
+reportUrl: wss://example.com/report
+# 鉴权 Token
+token: your-token-here
+# 调试模式
+isDebug: false
