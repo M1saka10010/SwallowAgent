@@ -1,0 +1,14 @@
+[Unit]
+Description=Swallow Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/swallow-agent
+ExecStart=/opt/swallow-agent/swallow-agent -c /opt/swallow-agent/config.yml
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

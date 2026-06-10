@@ -22,6 +22,35 @@ cd SwallowAgent
 go build -o swallow-agent .
 ```
 
+### Linux 一键安装（管道）
+
+从 [latest release](https://github.com/M1saka10010/SwallowAgent/releases/latest) 下载预编译二进制并自动安装为 systemd 服务。回报地址与 Token 通过参数传入：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- <reportUrl> <token>
+```
+
+示例：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- wss://mock.594144.xyz/report 1234567890abcdef
+```
+
+脚本会：
+
+- 自动识别架构（amd64 / arm64）并下载对应二进制到 `/opt/swallow-agent/swallow-agent`
+- 在 `/usr/local/bin/swallow-agent` 创建软链接
+- 生成 `/opt/swallow-agent/config.yml` 与 `swallow-agent.service` 并注册到 systemd
+- 自动启用并启动服务（开机自启）
+
+查看运行状态与日志：
+
+```bash
+sudo systemctl status swallow-agent.service
+sudo journalctl -u swallow-agent.service -f
+```
+
+
 ## 运行
 
 ```bash
