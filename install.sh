@@ -82,7 +82,8 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
 
 # 下载二进制
 TMP_FILE="$(mktemp)"
-trap 'rm -f "$TMP_FILE"' EXIT
+CHECKSUMS_FILE="$(mktemp)"
+trap 'rm -f "$TMP_FILE" "$CHECKSUMS_FILE"' EXIT
 
 info "正在下载: $DOWNLOAD_URL"
 if command -v curl >/dev/null 2>&1; then
@@ -92,6 +93,22 @@ else
 fi
 
 [ -s "$TMP_FILE" ] || error "下载的文件为空。"
+
+# 下载校验文件并验证二进制完整性
+info "正在下载校验文件..."
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/checksums.txt"
+$DL "$CHECKSUMS_URL" > "$CHECKSUMS_FILE" || error "无法下载校验文件（版本 ${TAG} 可能未发布校验文件）。"
+[ -s "$CHECKSUMS_FILE" ] || error "校验文件为空。"
+
+info "正在验证二进制完整性..."
+EXPECTED_HASH="$(grep -E "  ${ASSET}\$" "$CHECKSUMS_FILE" | awk '{print $1}')"
+[ -n "$EXPECTED_HASH" ] || error "校验文件中未找到 ${ASSET} 的记录。"
+ACTUAL_HASH="$(sha256sum "$TMP_FILE" | awk '{print $1}')"
+if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+    error "二进制校验失败！预期: $EXPECTED_HASH 实际: $ACTUAL_HASH"
+fi
+info "校验通过"
+
 chmod +x "$TMP_FILE"
 
 # 提权辅助函数
@@ -141,7 +158,7 @@ token: ${TOKEN}
 # 调试模式
 isDebug: false
 EOF
-    $SUDO chmod 644 "$CONFIG_FILE"
+    $SUDO chmod 600 "$CONFIG_FILE"
 fi
 
 # 生成 systemd 服务文件

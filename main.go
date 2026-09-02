@@ -80,6 +80,9 @@ func validateConfig(c *model.Config) error {
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		return fmt.Errorf("reportUrl 必须使用 ws:// 或 wss:// 协议")
 	}
+	if u.Scheme == "ws" {
+		fmt.Println("[安全警告] 正在使用明文 ws:// 协议，Token 将以明文传输，建议在生产环境使用 wss://")
+	}
 	if strings.TrimSpace(c.Token) == "" {
 		return fmt.Errorf("token 不能为空")
 	}

@@ -1,6 +1,8 @@
 module github.com/M1saka10010/SwallowAgent
 
-go 1.24
+go 1.25.0
+
+toolchain go1.26.6
 
 require (
 	github.com/gorilla/websocket v1.5.3
@@ -16,5 +18,5 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 )

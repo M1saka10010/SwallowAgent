@@ -57,26 +57,44 @@ func GetCPUInfo() (float64, error) {
 	return 0, nil
 }
 
-// GetNetworkInfo 获取指定网络接口的流量信息
-func GetNetworkInfo(interfaceName string) (uint64, uint64, error) {
-	// 获取网络接口信息
-	counters, err := net.IOCounters(true)
+// PrimeCPUSample 预热 CPU 采样基线。
+// gopsutil 的 cpu.Percent(0,false) 首次调用因无历史采样返回 0，
+// 预先调用一次建立基线，再等待 1 秒使下次采集有有效时间差可计算。
+func PrimeCPUSample() {
+	_, _ = cpu.Percent(0, false)
+	time.Sleep(time.Second)
+}
 
+// GetNetworkInfo 获取指定网络接口集合的流量信息。
+// 若 interfaceNames 为空，则聚合所有网卡。
+// 仅发起一次系统调用获取全部计数器，再在内存中按名称过滤。
+func GetNetworkInfo(interfaceNames []string) (uint64, uint64, error) {
+	counters, err := net.IOCounters(true)
 	if err != nil {
 		return 0, 0, err
 	}
 
 	recv, send := uint64(0), uint64(0)
 
-	for _, counter := range counters {
-		if interfaceName == "" || interfaceName == counter.Name {
-			recv += counter.BytesRecv
-			send += counter.BytesSent
+	if len(interfaceNames) == 0 {
+		for _, c := range counters {
+			recv += c.BytesRecv
+			send += c.BytesSent
+		}
+	} else {
+		want := make(map[string]struct{}, len(interfaceNames))
+		for _, name := range interfaceNames {
+			want[name] = struct{}{}
+		}
+		for _, c := range counters {
+			if _, ok := want[c.Name]; ok {
+				recv += c.BytesRecv
+				send += c.BytesSent
+			}
 		}
 	}
 
 	return recv, send, nil
-
 }
 
 // GetUsageInfo 获取系统使用情况
@@ -108,21 +126,10 @@ func GetUsageInfo(lastUsage *model.UsageInfo, paths []string, interfaceNames []s
 		}
 	}
 
-	// 获取网络信息
-	netRecv, netSend := uint64(0), uint64(0)
-	for _, interfaceName := range interfaceNames {
-		netRecv1, netSend1, err := GetNetworkInfo(interfaceName)
-		if err != nil {
-			return nil, err
-		}
-		netRecv += netRecv1
-		netSend += netSend1
-	}
-	if len(interfaceNames) == 0 {
-		netRecv, netSend, err = GetNetworkInfo("")
-		if err != nil {
-			return nil, err
-		}
+	// 获取网络信息（单次系统调用）
+	netRecv, netSend, err := GetNetworkInfo(interfaceNames)
+	if err != nil {
+		return nil, err
 	}
 
 	// 获取负载信息

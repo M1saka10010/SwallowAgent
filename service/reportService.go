@@ -18,10 +18,12 @@ const systemInfoIntervalFactor = 20
 
 // sleepOrDone 等待指定时长，若 ctx 被取消则提前返回 false
 func sleepOrDone(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-time.After(d):
+	case <-t.C:
 		return true
 	}
 }
@@ -68,6 +70,9 @@ func ReportSystemInfo(ctx context.Context, client *util.WSClient, interval uint6
 // ReportSystemUsage 周期性采集并上报系统使用情况
 func ReportSystemUsage(ctx context.Context, client *util.WSClient, paths []string, interfaceNames []string, interval uint64, isDebug bool, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	// 预热 CPU 采样基线，避免首次 cpu.Percent(0,false) 返回 0
+	util.PrimeCPUSample()
 
 	var lastUsage *model.UsageInfo
 	reportInterval := time.Duration(interval) * time.Second

@@ -14,7 +14,7 @@
 
 ## 安装与构建
 
-需要 Go 1.24 及以上版本。
+需要 Go 1.25 及以上版本。
 
 ```bash
 git clone https://github.com/M1saka10010/SwallowAgent.git
@@ -33,14 +33,15 @@ curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/insta
 示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- wss://mock.594144.xyz/report 1234567890abcdef
+curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- wss://your-server.example.com/report your-token-here
 ```
 
 脚本会：
 
 - 自动识别架构（amd64 / arm64）并下载对应二进制到 `/opt/swallow-agent/swallow-agent`
+- 下载 SHA256 校验文件并验证二进制完整性
 - 在 `/usr/local/bin/swallow-agent` 创建软链接
-- 生成 `/opt/swallow-agent/config.yml` 与 `swallow-agent.service` 并注册到 systemd
+- 生成 `/opt/swallow-agent/config.yml`（权限 600）与 `swallow-agent.service` 并注册到 systemd
 - 自动启用并启动服务（开机自启）
 
 查看运行状态与日志：
@@ -75,9 +76,9 @@ interfaceNames:
 # 使用情况采集间隔（秒）；系统信息按此间隔的 20 倍上报
 interval: 3
 # 回报地址，必须使用 ws:// 或 wss://
-reportUrl: wss://mock.594144.xyz/report
+reportUrl: wss://your-server.example.com/report
 # 鉴权 Token
-token: 1234567890abcdef
+token: your-token-here
 # 调试模式
 isDebug: true
 ```
