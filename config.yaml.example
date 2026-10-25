@@ -3,8 +3,7 @@
 #   - /
 #   - /data
 paths:
-  - C:/
-  - D:/
+  - /
 # 网卡名称（为空则聚合所有网卡）
 # 示例：
 #   - eth0
@@ -12,9 +11,11 @@ paths:
 interfaceNames:
 # 使用情况采集间隔（秒），必须大于 0；系统信息按此间隔的 20 倍上报
 interval: 3
-# 回报地址，必须使用 ws:// 或 wss://
+# 生产必须使用 wss://，路径必须为 /report，无查询参数
 reportUrl: wss://example.com/report
-# 鉴权 Token
-token: your-token-here
+# PKCS8 PEM Ed25519 私钥，普通文件且权限为 0600
+privateKeyPath: /opt/swallow-agent/agent.key
+# 仅开发允许 loopback ws://，不关闭 WSS 证书校验
+devMode: false
 # 调试模式
 isDebug: false

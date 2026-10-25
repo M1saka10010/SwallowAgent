@@ -2,8 +2,13 @@ package util
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +18,7 @@ import (
 // 写超时
 const writeTimeout = 10 * time.Second
 
-// 入站消息大小上限（字节）。服务端不应发送数据帧，仅用于限制控制帧，
-// 防止恶意服务端发送超大消息导致内存耗尽。
+// 入站认证及应用消息大小上限（字节）。
 const readLimit int64 = 4096
 
 // 重连退避时间区间
@@ -34,6 +38,7 @@ type Message struct {
 type WSClient struct {
 	url     string
 	headers http.Header
+	key     ed25519.PrivateKey
 
 	mu      sync.Mutex // 保护 conn、写操作与 backoff
 	conn    *websocket.Conn
@@ -41,27 +46,112 @@ type WSClient struct {
 }
 
 // NewWSClient 创建一个 WebSocket 客户端
-func NewWSClient(url string, headers map[string]string) *WSClient {
-	h := http.Header{}
-	for k, v := range headers {
-		h.Set(k, v)
+func NewWSClient(url string, key ed25519.PrivateKey, devMode bool) (*WSClient, error) {
+	if err := ValidateReportURL(url, devMode); err != nil {
+		return nil, err
 	}
+	if len(key) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("invalid Ed25519 private key")
+	}
+	h := http.Header{}
+	h.Set("X-Agent-Public-Key", PublicKeyString(key))
 	return &WSClient{
 		url:     url,
 		headers: h,
+		key:     append(ed25519.PrivateKey(nil), key...),
+	}, nil
+}
+
+func ValidateReportURL(raw string, devMode bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
 	}
+	if u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || u.EscapedPath() != "/report" || u.Opaque != "" {
+		return fmt.Errorf("reportUrl requires a host and exact /report path, without userinfo, query or fragment")
+	}
+	if u.Scheme == "wss" {
+		return nil
+	}
+	ip := net.ParseIP(u.Hostname())
+	if u.Scheme == "ws" && devMode && (strings.EqualFold(u.Hostname(), "localhost") || (ip != nil && ip.IsLoopback())) {
+		return nil
+	}
+	return fmt.Errorf("reportUrl requires wss; ws requires devMode and a loopback host")
 }
 
 // connect 建立连接并启动后台读循环，调用方需持有锁
 func (c *WSClient) connect(ctx context.Context) error {
-	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, c.url, c.headers)
+	authCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Proxy: http.ProxyFromEnvironment}
+	conn, _, err := dialer.DialContext(authCtx, c.url, c.headers)
 	if err != nil {
 		return fmt.Errorf("连接 WebSocket 失败: %w", err)
 	}
 	conn.SetReadLimit(readLimit)
+	stopped := make(chan struct{})
+	stop := context.AfterFunc(authCtx, func() { _ = conn.Close(); close(stopped) })
+	err = c.authenticate(authCtx, conn)
+	if !stop() {
+		<-stopped
+	}
+	if err == nil {
+		err = authCtx.Err()
+	}
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("设备认证失败: %w", err)
+	}
+	if err = conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if err = conn.SetWriteDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return err
+	}
 	c.conn = conn
 	go c.readLoop(ctx, conn)
+	return nil
+}
+
+func (c *WSClient) authenticate(ctx context.Context, conn *websocket.Conn) error {
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return err
+	}
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	var challenge struct {
+		Type      string `json:"type"`
+		Challenge string `json:"challenge"`
+	}
+	if err := conn.ReadJSON(&challenge); err != nil {
+		return err
+	}
+	nonce, err := base64.StdEncoding.Strict().DecodeString(challenge.Challenge)
+	if challenge.Type != "auth_challenge" || err != nil || len(nonce) != 32 || base64.StdEncoding.EncodeToString(nonce) != challenge.Challenge {
+		return fmt.Errorf("invalid authentication challenge")
+	}
+	message := []byte("swallow-report-auth-v1\n" + PublicKeyString(c.key) + "\n" + challenge.Challenge)
+	response := struct {
+		Type      string `json:"type"`
+		Signature string `json:"signature"`
+	}{"auth_response", base64.StdEncoding.EncodeToString(ed25519.Sign(c.key, message))}
+	if err := conn.WriteJSON(response); err != nil {
+		return err
+	}
+	var result struct {
+		Type string `json:"type"`
+	}
+	if err := conn.ReadJSON(&result); err != nil {
+		return err
+	}
+	if result.Type != "auth_ok" {
+		return fmt.Errorf("expected auth_ok")
+	}
 	return nil
 }
 
@@ -69,6 +159,9 @@ func (c *WSClient) connect(ctx context.Context) error {
 // ping/pong/close 等控制帧。gorilla 在应用读取时自动回复 ping 以 pong。
 // 读取出错（连接关闭、超时、远端关闭等）时丢弃当前连接并退出。
 func (c *WSClient) readLoop(ctx context.Context, conn *websocket.Conn) {
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -135,6 +228,9 @@ func (c *WSClient) ensureConn(ctx context.Context) error {
 
 // Send 发送一条消息，失败时丢弃当前连接以便下次重连
 func (c *WSClient) Send(ctx context.Context, msgType string, data interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := c.ensureConn(ctx); err != nil {
 		return err
 	}
@@ -145,6 +241,17 @@ func (c *WSClient) Send(ctx context.Context, msgType string, data interface{}) e
 	if c.conn == nil {
 		return fmt.Errorf("连接不可用")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	conn := c.conn
+	stopped := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(stopped) })
+	defer func() {
+		if !stop() {
+			<-stopped
+		}
+	}()
 
 	if err := c.conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 		c.dropLocked()

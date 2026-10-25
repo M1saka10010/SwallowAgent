@@ -9,7 +9,7 @@
 - 系统信息与使用情况分别采集，使用统一报文封装区分
 - 支持多磁盘路径、多网卡聚合统计
 - 网络收发速率实时计算
-- 通过 `Token` 请求头进行连接鉴权
+- 通过 Ed25519 公钥注册与挑战签名鉴权（不兼容旧 Token）
 - 支持 `SIGINT` / `SIGTERM` 优雅退出
 
 ## 安装与构建
@@ -22,27 +22,63 @@ cd SwallowAgent
 go build -o swallow-agent .
 ```
 
-### Linux 一键安装（管道）
+### 固定 Release 一键交付（Linux amd64 / arm64）
 
-从 [latest release](https://github.com/M1saka10010/SwallowAgent/releases/latest) 下载预编译二进制并自动安装为 systemd 服务。回报地址与 Token 通过参数传入：
+公钥认证目标 release **尚未发布**；以下是发布后的接口，不代表任何目标版本已经存在。面板必须由管理员配置明确的 `AGENT_VERSION`（带 v 前缀的严格 SemVer，可带 `-预发布标识` 和 `+构建元数据`），未配置时禁用 release 命令；不得默认 `latest` 或将旧 Token 版本 v0.0.2 当作目标。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- <reportUrl> <token>
-```
-
-示例：
+先设置 `AGENT_VERSION` 为已审核且实际发布的 tag，并运行 `sudo -v` 完成权限认证。下面一条命令交互读取一次性令牌（不回显），下载**同一固定 tag** 的 bootstrap，再由它下载对应架构 binary、install.sh 和 checksums.txt，校验后安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- wss://your-server.example.com/report your-token-here
+(set -euo pipefail; : "${AGENT_VERSION:?请先设置已审核且实际发布的目标 tag}"; [[ "$AGENT_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*))*)?(\+[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*)?$ ]]; read -rsp '一次性注册令牌: ' TOKEN; printf '\n' >&2; SCRIPT=$(curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 "https://github.com/M1saka10010/SwallowAgent/releases/download/$AGENT_VERSION/bootstrap.sh"); printf %s "$TOKEN" | sudo -n bash -c "$SCRIPT" -- --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin)
 ```
 
-脚本会：
+迁移原设备时只将 `--mode install` 改为 `--mode migrate-token-to-key`，使用原设备签发的凭据；其余限制和回滚边界见下文。面板可将同一模板中的版本、地址和模式替换为经过校验且正确 shell quoting 的值，凭据只能通过 stdin；脚本代码通过 `bash -c` 参数传入，**不能用 `curl | bash` 与凭据争用 stdin**。也可先审核下载的 bootstrap，再执行 `printf %s "$TOKEN" | sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin`。不要开启 `set -x` 或记录凭据。
 
-- 自动识别架构（amd64 / arm64）并下载对应二进制到 `/opt/swallow-agent/swallow-agent`
-- 下载 SHA256 校验文件并验证二进制完整性
-- 在 `/usr/local/bin/swallow-agent` 创建软链接
-- 生成 `/opt/swallow-agent/config.yml`（权限 600）与 `swallow-agent.service` 并注册到 systemd
-- 自动启用并启动服务（开机自启）
+bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任一下载失败、缺失/重复摘要或 SHA-256 不符均不执行资产。临时目录权限为 0700，正常/失败/可捕获信号退出会清理；子脚本退出码原样返回。INT/TERM/HUP 转交子进程 TERM 以触发迁移回滚，入口分别退出 130/143/129；SIGKILL/断电无法清理。`--binary` 本地高级模式保留在下述两个原始脚本中，不经 bootstrap 下载。
+
+**信任边界：** 上述初次 bootstrap 依赖 HTTPS、GitHub 仓库/release 管理者和本机 CA 信任；它不能证明自己未被篡改。同一 release 的 checksums.txt 只校验下载资产与该清单一致，**不是独立签名**，不能抵御发布账户被攻陷或资产与清单同时替换；固定 tag 也不保证资产永不可变。更严格环境应先从独立可信渠道核验 bootstrap/资产摘要或审核源码后使用本地 `--binary`，不要把在线同源摘要描述为供应链签名验证。
+
+发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/迁移 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、三个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
+
+### Linux 安装（本地构建版本）
+
+先执行上述构建，再安装可信的本地二进制；脚本不下载 release，避免安装旧 Token 版本。
+
+```bash
+printf %s '<一次性注册令牌>' | sudo bash install.sh --binary ./swallow-agent --report-url wss://example.com/report --enrollment-token-stdin
+```
+
+在 Monitor 管理界面创建设备并获取注册命令。令牌为 64 位小写 hex，有效期 15 分钟且只能使用一次。脚本创建 `/opt/swallow-agent`（0700）、二进制、`agent.key`（0600）、`config.yml`（0600）和 systemd 服务文件，注册成功后自动执行以下命令，**无需批准或额外启用步骤**：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now swallow-agent.service
+```
+
+脚本用不含令牌的状态标记识别本次安装。注册、写配置或启动失败后可使用相同地址和模式重跑，始终保留并复用原私钥。非本脚本管理的既有安装、符号链接或不同服务文件拒绝覆盖；本脚本已有配置和二进制不会被覆盖。开发环境仅可追加 `--dev-mode` 使用 loopback `ws://`，不会跳过 TLS 验证。
+
+令牌是短期 bearer 凭据：持有者可抢先绑定自己的公钥，签名只证明私钥持有，不能防止被窃令牌抢注。请通过可信渠道传递，避免聊天、日志、shell 历史和录屏泄露；不要开启 shell tracing。Agent 不把令牌写入配置或日志。疑似泄露应重新签发令牌；若已被绑定，应先核查设备与公钥，不能把重试当作抢注修复。
+
+### Token → 公钥认证专用迁移（保留原设备）
+
+来源为 [v0.0.2](https://github.com/M1saka10010/SwallowAgent/releases/tag/v0.0.2) 的标准 Linux Token 安装；目标公钥认证 breaking 版本尚未发布，不预设版本号。请从当前源码构建可信本地二进制，不自动下载 latest（v0.0.2 是旧 Token 版本）。脚本按配置 schema 和标准布局判断来源，不声称验证旧二进制版本或哈希。
+
+在 Monitor **原设备**上签发一次性注册凭据，不要新建设备；这样保留设备身份及历史数据。不要自动执行远程脚本。
+
+
+```bash
+printf %s '<原设备的一次性注册令牌>' | sudo bash migrate-token-to-key.sh --binary ./swallow-agent --report-url wss://example.com/report --enrollment-token-stdin
+```
+
+迁移保留 paths、interfaceNames、interval、isDebug 及主机采集身份，删除旧 token，使用安装目录内 agent.key；失败后已有私钥始终复用。URL 可省略以复用旧合法 wss 地址，前端命令始终提供 URL；旧 ws 地址需改为 wss，开发仅 loopback 可追加 --dev-mode。未知字段、重复键、多文档、非法配置拒绝，错误不回显旧 token。
+
+仅支持默认 /opt/swallow-agent 的 0755 目录、0600 config.yml、精确指向目录内 unit 的 systemd 链接及 v0.0.2 原样 unit。首次必须有非空 token，不能含 privateKeyPath。自定义路径、unit、drop-in、不安全所有权/权限均拒绝。不是通用升级工具，任意已公钥化安装不能通过它更新版本；install.sh --upgrade 也明确拒绝并指向本迁移脚本。
+
+停服前有界校验凭据、严格验证配置/私钥并暂存本地二进制；互斥锁防止并发。备份目录 0700，旧 binary/config/unit 备份 0600。停服后注册，并在 45 秒总预算内实际采集、认证并发送 system_info/system_usage，再替换文件；重启后重复检查服务状态，启动后立即失败会触发回滚。当前上报协议没有入库 ACK，因此发送成功不等于服务器持久化确认，也不是长期运行保证。原 inactive 服务验证后恢复停止，unit、链接、目录权限、enable 状态不变。成功写入私有 .token-to-key-complete 标记，记录参数及已安装 binary/config/key/unit 的摘要；同次迁移重跑仅确认文件和服务状态，不注册、不重启、不安装所传另一版本。
+
+注册、替换、启动失败或 TERM 会取消注册子进程并本地回滚，保留生成的私钥供重试。**服务端绑定无法回滚**，旧 Token 服务可能已无法认证；必须保留同一私钥，必要时重新签发原设备凭据。备份含旧凭据，确认稳定后妥善清理。断电/SIGKILL 无法触发回滚，须从私有备份手动恢复。
+
+Linux 内部预检接口：`swallow-agent -prepare-token-migration OLD -output-config NEW -default-private-key PATH -enrollment-token-stdin [-report-url URL] [-dev-mode]`。NEW 必须不存在；预检不读取 stdin、不联网，但会生成并保留迁移私钥。`-enroll-token-migration NEW -enrollment-token-stdin` 仅供脚本注册迁移配置，必须提供凭据开关；通用注册仍使用 `-enroll`。
 
 查看运行状态与日志：
 
@@ -54,13 +90,73 @@ sudo journalctl -u swallow-agent.service -f
 
 ## 运行
 
+手动自动注册（将令牌通过标准输入传入）：
+
+```bash
+printf %s '<一次性注册令牌>' | ./swallow-agent -enroll wss://example.com/report -private-key ./agent.key -enrollment-token-stdin
+```
+
+私钥不存在则独占生成，存在则复用，失败和重试不会换钥。先用现有 key 完成一次有 10 秒上限的正常 report 认证；成功则跳过注册。注册响应丢失或失败后再做一次相同认证来恢复。此恢复只证明 key 已在同服务绑定，不证明它对应输入令牌的目标设备；只应用于重跑同一安装。注册 POST 到同源 HTTPS `/enroll`，签名内容为 `swallow-enroll-v1\n<token>\n<publicKey>`，返回 `publicId`；拒绝所有 HTTP 重定向，HTTP 请求超时 10 秒，响应上限 4096 字节。完整网络流程最多三次各 10 秒操作，不无限重连。开发可追加 `-dev-mode`，仅允许 loopback 明文 WS/HTTP。
+
+手动公钥部署仍可先生成每台设备独立的密钥，将输出的公钥注册到 Monitor，然后设置配置中的 `privateKeyPath`：
+
+```bash
+./swallow-agent -generate-key ./agent.key
+./swallow-agent -show-public-key ./agent.key
+```
+
+私钥为单个 PKCS8 PEM Ed25519 私钥。POSIX 下必须是权限严格为 0600 的普通文件，拒绝符号链接；Windows 不设置或校验 ACL、所有者，使用系统默认文件权限，仅检查普通文件并拒绝末级重解析点。生成命令独占创建，不覆盖已有路径。请将私钥置于可信目录，勿上传或共享私钥。当前 Monitor 不支持原地换钥：轮换需生成新文件、删除旧设备并使用新公钥重建设备；删除设备也会删除历史数据，操作前请确认影响。
+
+POSIX 手动运行：
+
 ```bash
 ./swallow-agent -c config.yaml
 ```
 
+### Windows 手动运行
+
+Windows 支持密钥生成、自动注册和前台采集上报；`install.sh` 与 `migrate-token-to-key.sh` 仍仅用于 Linux/systemd，不安装 Windows 服务。运行账户需要有私钥读取权限；Agent 不要求文件所有者与运行账户相同，也不会修改已有文件权限。
+
+在可信目录内放置 `swallow-agent.exe`，从 Monitor 原设备或新设备取得一次性注册凭据，通过 PowerShell 执行（凭据属于敏感信息，避免保存到命令历史）：
+
+```powershell
+'<一次性注册令牌>' | .\swallow-agent.exe -enroll 'wss://example.com/report' -private-key '.\agent.key' -enrollment-token-stdin
+```
+
+创建 `config.yaml`，将磁盘和私钥路径改为 Windows 路径；推荐私钥使用绝对路径。YAML 的单引号字符串可直接保留反斜杠：
+
+```yaml
+paths:
+  - 'C:\'
+interfaceNames: []
+interval: 3
+reportUrl: wss://example.com/report
+privateKeyPath: 'C:\SwallowAgent\agent.key'
+devMode: false
+isDebug: false
+```
+
+将示例中的私钥路径改为刚才生成文件的实际位置，然后运行：
+
+```powershell
+.\swallow-agent.exe -c .\config.yaml
+```
+
+已有公钥绑定时可直接加载原私钥运行；不要重生成私钥来替代配置或权限修复。Windows 私钥的保密性由系统及目录权限负责：即使其他账户可读，Agent 也不会拒绝加载；能够复制私钥的人可以冒充该设备。请勿放入共享目录。文件级检查不保证祖先目录没有 junction。
+
+若生成密钥遇到文件检查、写入或关闭失败，可能留下不完整文件；为避免误删或替换已有身份，程序不会自动覆盖它。请先检查并备份该文件，确认没有已绑定的有效私钥后再处理，不要直接删除重试。
+
 | 参数 | 说明 |
 | ---- | ---- |
 | `-c` | 指定 YAML 配置文件路径（必填） |
+| `-enroll` | 自动注册的 report URL；与 `-private-key` 和 `-enrollment-token-stdin` 同时使用 |
+| `-private-key` | 自动注册使用的私钥文件，存在则复用 |
+| `-enrollment-token-stdin` | 从标准输入读取一次性令牌，不提供令牌命令行参数 |
+| `-dev-mode` | 自动注册时允许 loopback WS/HTTP |
+| `-generate-key` | 独占生成指定私钥文件，只打印 base64 公钥；不加载配置 |
+| `-show-public-key` | 从指定私钥文件读取并打印 base64 公钥；不加载配置 |
+
+两个密钥命令互斥，不能与 `-c` 组合。旧 `token` 字段及未知字段会被拒绝，配置必须只有一个 YAML 文档。
 
 ## 配置
 
@@ -69,16 +165,15 @@ sudo journalctl -u swallow-agent.service -f
 ```yaml
 # 磁盘目录（为空则采集根目录 /）
 paths:
-  - C:/
-  - D:/
+  - /
 # 网卡名称（为空则聚合所有网卡）
 interfaceNames:
 # 使用情况采集间隔（秒）；系统信息按此间隔的 20 倍上报
 interval: 3
-# 回报地址，必须使用 ws:// 或 wss://
+# 生产环境必须使用 wss://
 reportUrl: wss://your-server.example.com/report
-# 鉴权 Token
-token: your-token-here
+privateKeyPath: /opt/swallow-agent/agent.key
+devMode: false
 # 调试模式
 isDebug: true
 ```
@@ -88,16 +183,20 @@ isDebug: true
 | `paths` | `[]string` | 需要统计的磁盘挂载点/盘符；为空时默认统计根目录 `/`。多个路径会聚合求和 |
 | `interfaceNames` | `[]string` | 需要统计的网卡名称；为空时聚合所有网卡 |
 | `interval` | `uint64` | 使用情况采集间隔（秒），必须大于 0。系统信息按该间隔的 **20 倍** 上报 |
-| `reportUrl` | `string` | 上报地址，必须以 `ws://` 或 `wss://` 开头 |
-| `token` | `string` | 鉴权 Token，连接时通过请求头 `Token` 携带，不能为空 |
+| `reportUrl` | `string` | 生产使用 `wss://`，路径必须为 `/report`；禁止 userinfo、查询参数和 fragment |
+| `privateKeyPath` | `string` | 本地 Ed25519 私钥路径，建议使用绝对路径 |
+| `devMode` | `bool` | 仅允许 localhost 或 loopback IP 的明文 `ws://`，默认 false，不跳过 TLS 证书校验 |
 | `isDebug` | `bool` | 是否打印上报调试日志 |
 
 ## 通信协议
 
 ### 连接
 
-- 协议：WebSocket（`ws://` 或 `wss://`）
-- 鉴权：建立连接时在 HTTP 握手请求头中携带 `Token: <token>`
+- 生产协议：WSS；开发环境可显式开启 `devMode` 使用 loopback WS
+- 握手请求头：`X-Agent-Public-Key: <标准 base64 Ed25519 公钥>`，不发送 Token
+- 服务端发送 `{"type":"auth_challenge","challenge":"<32 字节随机数的标准 base64>"}`
+- 客户端签名 UTF-8 字节串 `swallow-report-auth-v1\n<公钥 base64>\n<challenge base64>`（没有末尾换行），发送 `{"type":"auth_response","signature":"<签名 base64>"}`
+- 必须收到 `{"type":"auth_ok"}` 后才开始上报；连接与认证共享 10 秒预算，入站消息上限 4096 字节。拒绝无效挑战、认证拒绝和超大消息
 - 客户端使用单条长连接发送所有报文；连接断开后自动重连（退避 1s → 30s）
 
 ### 报文格式
@@ -209,7 +308,7 @@ isDebug: true
 ```
 SwallowAgent/
 ├── main.go              # 程序入口：加载配置、校验、启动采集协程、信号处理
-├── config.yaml          # 配置文件示例
+├── config.yaml.example  # 配置文件示例
 ├── model/               # 数据模型
 │   ├── configModel.go   # 配置结构
 │   ├── sysInfoModel.go  # 系统信息结构

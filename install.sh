@@ -1,170 +1,100 @@
 #!/usr/bin/env bash
-#
-# SwallowAgent 一键安装脚本 (Linux)
-# 用法:
-#   curl -fsSL https://raw.githubusercontent.com/M1saka10010/SwallowAgent/main/install.sh | bash -s -- <reportUrl> <token>
-#   或
-#   bash install.sh <reportUrl> <token>
-#   或使用具名参数:
-#   bash install.sh --report-url ws://host:8080/report --token xxxx
-#
 set -euo pipefail
-
-REPO="M1saka10010/SwallowAgent"
-BIN_NAME="swallow-agent"
-INSTALL_DIR="${INSTALL_DIR:-/opt/swallow-agent}"
-LINK_DIR="${LINK_DIR:-/usr/local/bin}"
-SERVICE_NAME="swallow-agent.service"
-SERVICE_DIR="${SERVICE_DIR:-/etc/systemd/system}"
-
-info()  { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
-warn()  { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
-error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
-
-# 解析参数：reportUrl 与 token
+umask 077
+error() { printf '%s\n' "$*" >&2; exit 1; }
+BINARY=""
 REPORT_URL=""
-TOKEN=""
-POSITIONAL=()
-while [ $# -gt 0 ]; do
+TOKEN_STDIN=false
+DEV_MODE=false
+while [ "$#" -gt 0 ]; do
     case "$1" in
-        --report-url) REPORT_URL="${2:-}"; shift 2 ;;
-        --token)      TOKEN="${2:-}"; shift 2 ;;
+        --upgrade) error "通用升级不受支持；Token 迁移请使用 migrate-token-to-key.sh" ;;
+        --enrollment-token-stdin) TOKEN_STDIN=true; shift ;;
+        --dev-mode) DEV_MODE=true; shift ;;
+        --binary|--report-url)
+            [ "$#" -ge 2 ] || error "缺少参数值: $1"
+            case "$1" in
+                --binary) BINARY="$2" ;;
+                --report-url) REPORT_URL="$2" ;;
+            esac
+            shift 2 ;;
         -h|--help)
-            echo "用法: bash install.sh <reportUrl> <token>"
-            echo "      bash install.sh --report-url <url> --token <token>"
+            echo '用法: printf %s TOKEN | sudo bash install.sh --binary ./swallow-agent --report-url wss://example.com/report --enrollment-token-stdin [--dev-mode]'
+            echo '仅安装本地新版本；注册后自动启动服务，不下载 release。'
             exit 0 ;;
-        *) POSITIONAL+=("$1"); shift ;;
+        *) error "未知参数: $1" ;;
     esac
 done
-[ -z "$REPORT_URL" ] && [ "${#POSITIONAL[@]}" -ge 1 ] && REPORT_URL="${POSITIONAL[0]}"
-[ -z "$TOKEN" ] && [ "${#POSITIONAL[@]}" -ge 2 ] && TOKEN="${POSITIONAL[1]}"
-
-[ -n "$REPORT_URL" ] || error "缺少回报地址，请传入。示例: bash install.sh ws://host:8080/report <token>"
-[ -n "$TOKEN" ]      || error "缺少鉴权 Token，请传入。示例: bash install.sh ws://host:8080/report <token>"
-case "$REPORT_URL" in
-    ws://*|wss://*) ;;
-    *) error "回报地址必须以 ws:// 或 wss:// 开头，当前: $REPORT_URL" ;;
-esac
-
-# 检测下载工具
-if command -v curl >/dev/null 2>&1; then
-    DL="curl -fsSL"
-elif command -v wget >/dev/null 2>&1; then
-    DL="wget -qO-"
-else
-    error "需要 curl 或 wget，请先安装其中之一。"
+[ "$(uname -s)" = Linux ] || error '仅支持 Linux'
+[ "$(id -u)" -eq 0 ] || error '请使用 root 或 sudo 执行'
+[ -f "$BINARY" ] && [ -x "$BINARY" ] || error '请指定本地构建且可信的可执行文件 --binary'
+URL_PATTERN='^wss://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]+)?/report$'
+[ "$TOKEN_STDIN" = true ] || error '必须指定 --enrollment-token-stdin'
+if [ "$DEV_MODE" = true ]; then
+    URL_PATTERN='^wss?://([a-zA-Z0-9.-]+|\[[a-fA-F0-9:]+\])(:[0-9]+)?/report$'
 fi
-
-# 检测操作系统
-OS="$(uname -s)"
-[ "$OS" = "Linux" ] || error "此脚本仅支持 Linux，当前系统: $OS"
-
-# 检测架构
-ARCH="$(uname -m)"
-case "$ARCH" in
-    x86_64|amd64)         ARCH="amd64" ;;
-    aarch64|arm64)        ARCH="arm64" ;;
-    *) error "不支持的架构: $ARCH" ;;
-esac
-
-ASSET="${BIN_NAME}-linux-${ARCH}"
-
-# 获取最新版本下载地址
-info "正在查询最新版本..."
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-RELEASE_JSON="$($DL "$API_URL")" || error "无法访问 GitHub API。"
-
-TAG="$(printf '%s' "$RELEASE_JSON" | grep -oE '"tag_name"\s*:\s*"[^"]+"' | head -n1 | sed -E 's/.*"tag_name"\s*:\s*"([^"]+)".*/\1/')"
-[ -n "$TAG" ] || error "无法解析最新版本号。"
-info "最新版本: $TAG"
-
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
-
-# 下载二进制
-TMP_FILE="$(mktemp)"
-CHECKSUMS_FILE="$(mktemp)"
-trap 'rm -f "$TMP_FILE" "$CHECKSUMS_FILE"' EXIT
-
-info "正在下载: $DOWNLOAD_URL"
-if command -v curl >/dev/null 2>&1; then
-    curl -fL --progress-bar -o "$TMP_FILE" "$DOWNLOAD_URL" || error "下载失败。"
+[[ "$REPORT_URL" =~ $URL_PATTERN ]] || error '地址必须为 wss://host[:port]/report，不支持查询参数'
+INSTALL_DIR=/opt/swallow-agent
+TARGET="$INSTALL_DIR/swallow-agent"
+KEY="$INSTALL_DIR/agent.key"
+CONFIG="$INSTALL_DIR/config.yml"
+SERVICE=/etc/systemd/system/swallow-agent.service
+STATE="$INSTALL_DIR/.enrollment-install"
+HELP="$("$BINARY" -h </dev/null 2>&1)"
+[[ "$HELP" == *-enrollment-token-stdin* ]] || error '二进制不支持自动注册，请先从当前源码构建'
+EXPECTED_STATE="swallow-enrollment-v1 $REPORT_URL $DEV_MODE"
+if [ -e "$INSTALL_DIR" ] || [ -L "$INSTALL_DIR" ]; then
+    [ -d "$INSTALL_DIR" ] && [ ! -L "$INSTALL_DIR" ] && [ "$(stat -c '%u:%a' "$INSTALL_DIR")" = '0:700' ] || error '安装目录权限不安全'
+    [ -f "$STATE" ] && [ ! -L "$STATE" ] && [ "$(stat -c '%u:%a' "$STATE")" = '0:600' ] || error '既有安装并非本脚本管理，拒绝覆盖'
+    [ "$(<"$STATE")" = "$EXPECTED_STATE" ] || error '重试必须使用相同地址与开发模式'
 else
-    wget -O "$TMP_FILE" "$DOWNLOAD_URL" || error "下载失败。"
+    [ ! -e "$SERVICE" ] && [ ! -L "$SERVICE" ] || error '服务文件已存在，拒绝覆盖'
+    mkdir -m 700 "$INSTALL_DIR"
+    printf '%s\n' "$EXPECTED_STATE" > "$STATE"
 fi
-
-[ -s "$TMP_FILE" ] || error "下载的文件为空。"
-
-# 下载校验文件并验证二进制完整性
-info "正在下载校验文件..."
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/checksums.txt"
-$DL "$CHECKSUMS_URL" > "$CHECKSUMS_FILE" || error "无法下载校验文件（版本 ${TAG} 可能未发布校验文件）。"
-[ -s "$CHECKSUMS_FILE" ] || error "校验文件为空。"
-
-info "正在验证二进制完整性..."
-EXPECTED_HASH="$(grep -E "  ${ASSET}\$" "$CHECKSUMS_FILE" | awk '{print $1}')"
-[ -n "$EXPECTED_HASH" ] || error "校验文件中未找到 ${ASSET} 的记录。"
-ACTUAL_HASH="$(sha256sum "$TMP_FILE" | awk '{print $1}')"
-if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
-    error "二进制校验失败！预期: $EXPECTED_HASH 实际: $ACTUAL_HASH"
+for file in "$TARGET" "$CONFIG" "$SERVICE" "$INSTALL_DIR/.install.lock"; do
+    [ ! -L "$file" ] || error "拒绝符号链接: $file"
+    [ ! -e "$file" ] || [ -f "$file" ] || error "不是普通文件: $file"
+done
+exec 9>"$INSTALL_DIR/.install.lock"
+flock -n 9 || error '另一个安装进程正在运行'
+ARGS=(-enroll "$REPORT_URL" -private-key "$KEY" -enrollment-token-stdin)
+[ "$DEV_MODE" = false ] || ARGS+=(-dev-mode)
+CHILD=""
+cleanup_install() {
+    local status=$?
+    trap - EXIT INT TERM HUP
+    if [ -n "$CHILD" ]; then kill -TERM "$CHILD" 2>/dev/null || true; wait "$CHILD" 2>/dev/null || true; fi
+    exit "$status"
+}
+trap cleanup_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+"$BINARY" "${ARGS[@]}" <&0 &
+CHILD=$!
+wait "$CHILD"
+CHILD=""
+if [ ! -e "$TARGET" ]; then
+    TEMP_BINARY="$(mktemp "$INSTALL_DIR/.binary.XXXXXX")"
+    install -m 755 "$BINARY" "$TEMP_BINARY"
+    mv "$TEMP_BINARY" "$TARGET"
 fi
-info "校验通过"
-
-chmod +x "$TMP_FILE"
-
-# 提权辅助函数
-if [ "$(id -u)" -eq 0 ]; then
-    SUDO=""
-elif command -v sudo >/dev/null 2>&1; then
-    SUDO="sudo"
-    info "安装需要管理员权限，可能会提示输入密码。"
-else
-    error "需要 root 权限或 sudo 来写入 ${INSTALL_DIR} 和 ${LINK_DIR}。"
-fi
-
-# 安装到 /opt/swallow-agent
-TARGET="${INSTALL_DIR}/${BIN_NAME}"
-info "正在安装到 $TARGET"
-$SUDO mkdir -p "$INSTALL_DIR"
-$SUDO mv "$TMP_FILE" "$TARGET"
-$SUDO chmod 755 "$TARGET"
-trap - EXIT
-
-# 创建软链接到 PATH
-LINK="${LINK_DIR}/${BIN_NAME}"
-info "正在创建软链接: $LINK -> $TARGET"
-$SUDO mkdir -p "$LINK_DIR"
-$SUDO ln -sf "$TARGET" "$LINK"
-
-info "安装完成: $TARGET"
-info "软链接: $LINK"
-
-# 生成配置文件 config.yml（已存在则跳过，避免覆盖用户配置）
-CONFIG_FILE="${INSTALL_DIR}/config.yml"
-if $SUDO test -f "$CONFIG_FILE"; then
-    info "配置文件已存在，跳过生成: $CONFIG_FILE"
-else
-    info "正在生成配置文件: $CONFIG_FILE"
-    $SUDO tee "$CONFIG_FILE" >/dev/null <<EOF
-# 磁盘目录（为空则采集根目录 /）
+if [ ! -e "$CONFIG" ]; then
+TEMP_CONFIG="$(mktemp "$INSTALL_DIR/.config.XXXXXX")"
+cat > "$TEMP_CONFIG" <<EOF
 paths:
-# 网卡名称（为空则聚合所有网卡）
 interfaceNames:
-# 使用情况采集间隔（秒）；系统信息按此间隔的 20 倍上报
 interval: 3
-# 回报地址，必须使用 ws:// 或 wss://
-reportUrl: ${REPORT_URL}
-# 鉴权 Token
-token: ${TOKEN}
-# 调试模式
+reportUrl: '$REPORT_URL'
+privateKeyPath: '$KEY'
+devMode: $DEV_MODE
 isDebug: false
 EOF
-    $SUDO chmod 600 "$CONFIG_FILE"
+mv "$TEMP_CONFIG" "$CONFIG"
 fi
-
-# 生成 systemd 服务文件
-SERVICE_FILE="${INSTALL_DIR}/${SERVICE_NAME}"
-info "正在生成服务文件: $SERVICE_FILE"
-$SUDO tee "$SERVICE_FILE" >/dev/null <<EOF
+TEMP_SERVICE="$(mktemp "$INSTALL_DIR/.service.XXXXXX")"
+cat > "$TEMP_SERVICE" <<EOF
 [Unit]
 Description=Swallow Agent
 After=network-online.target
@@ -172,38 +102,23 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/${BIN_NAME} -c ${INSTALL_DIR}/config.yml
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$TARGET -c $CONFIG
 Restart=on-failure
 RestartSec=5s
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
 EOF
-$SUDO chmod 644 "$SERVICE_FILE"
-
-# 注册并启动 systemd 服务
-if command -v systemctl >/dev/null 2>&1; then
-    info "正在注册 systemd 服务..."
-    $SUDO ln -sf "$SERVICE_FILE" "${SERVICE_DIR}/${SERVICE_NAME}"
-    $SUDO systemctl daemon-reload
-    info "正在启用并启动服务..."
-    $SUDO systemctl enable --now "${SERVICE_NAME}"
-    if $SUDO systemctl is-active --quiet "${SERVICE_NAME}"; then
-        info "服务已启动并设为开机自启。"
-    else
-        warn "服务启动失败，请检查日志: sudo journalctl -u ${SERVICE_NAME} -e"
-    fi
-    info "常用命令:"
-    info "  查看状态: sudo systemctl status ${SERVICE_NAME}"
-    info "  查看日志: sudo journalctl -u ${SERVICE_NAME} -f"
+if [ -e "$SERVICE" ]; then
+    cmp -s "$TEMP_SERVICE" "$SERVICE" || error '既有服务内容不同，拒绝覆盖'
 else
-    warn "未检测到 systemctl，已生成服务文件但未注册: $SERVICE_FILE"
+    SYSTEM_TEMP="$(mktemp /etc/systemd/system/.swallow-agent.XXXXXX)"
+    install -m 644 "$TEMP_SERVICE" "$SYSTEM_TEMP"
+    mv "$SYSTEM_TEMP" "$SERVICE"
 fi
-
-# 验证
-if command -v "$BIN_NAME" >/dev/null 2>&1; then
-    info "可执行文件已就绪，运行 '${BIN_NAME}' 即可使用。"
-else
-    warn "$LINK_DIR 不在 PATH 中，请手动添加或使用完整路径: $LINK"
-fi
+rm -f "$TEMP_SERVICE"
+systemctl daemon-reload
+systemctl enable --now swallow-agent.service
+printf '%s\n' '注册与安装完成，服务已启动。无需额外批准。'

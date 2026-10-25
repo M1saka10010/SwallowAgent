@@ -8,9 +8,9 @@ type Config struct {
 	// 采集间隔
 	Interval uint64 `yaml:"interval"`
 	// 回报地址
-	ReportURL string `yaml:"reportUrl"`
-	// Token
-	Token string `yaml:"token"`
+	ReportURL      string `yaml:"reportUrl"`
+	PrivateKeyPath string `yaml:"privateKeyPath"`
+	DevMode        bool   `yaml:"devMode"`
 	// 调试模式
 	IsDebug bool `yaml:"isDebug"`
 }
