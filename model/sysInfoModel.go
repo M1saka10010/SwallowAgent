@@ -1,6 +1,7 @@
 package model
 
 type SysInfo struct {
+	AgentVersion         string `json:"agentVersion"`
 	Hostname             string `json:"hostname"`
 	Uptime               uint64 `json:"uptime"`
 	BootTime             uint64 `json:"bootTime"`

@@ -34,9 +34,15 @@ go build -o swallow-agent .
 
 迁移原设备时只将 `--mode install` 改为 `--mode migrate-token-to-key`，使用原设备签发的凭据；其余限制和回滚边界见下文。面板可将同一模板中的版本、地址和模式替换为经过校验且正确 shell quoting 的值，凭据只能通过 stdin；脚本代码通过 `bash -c` 参数传入，**不能用 `curl | bash` 与凭据争用 stdin**。也可先审核下载的 bootstrap，再执行 `printf %s "$TOKEN" | sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin`。不要开启 `set -x` 或记录凭据。
 
-bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任一下载失败、缺失/重复摘要或 SHA-256 不符均不执行资产。临时目录权限为 0700，正常/失败/可捕获信号退出会清理；子脚本退出码原样返回。INT/TERM/HUP 转交子进程 TERM 以触发迁移回滚，入口分别退出 130/143/129；SIGKILL/断电无法清理。`--binary` 本地高级模式保留在下述两个原始脚本中，不经 bootstrap 下载。
+bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任一下载失败、缺失/重复摘要或 SHA-256 不符均不执行资产。下载前先在 `${TMPDIR:-/tmp}` 创建 0700 私有临时目录，并直接执行探测脚本（不读取凭据 stdin）；不可写或 `noexec` 时依次尝试 `/var/tmp`、`/opt`。全部失败则明确报错且不下载。不会修改挂载选项、已有目录权限或预先创建 Agent 安装目录；只清理本次 mktemp 创建的目录。正常/失败/可捕获信号退出会清理；子脚本退出码原样返回。INT/TERM/HUP 转交子进程 TERM 以触发迁移回滚，入口分别退出 130/143/129；SIGKILL/断电无法清理。`--binary` 本地高级模式保留在下述两个原始脚本中，不经 bootstrap 下载。
 
 **信任边界：** 上述初次 bootstrap 依赖 HTTPS、GitHub 仓库/release 管理者和本机 CA 信任；它不能证明自己未被篡改。同一 release 的 checksums.txt 只校验下载资产与该清单一致，**不是独立签名**，不能抵御发布账户被攻陷或资产与清单同时替换；固定 tag 也不保证资产永不可变。更严格环境应先从独立可信渠道核验 bootstrap/资产摘要或审核源码后使用本地 `--binary`，不要把在线同源摘要描述为供应链签名验证。
+
+维护者可在仓库根目录运行 `bash tests/bootstrap_test.sh`。Linux 上还可用以下命令验证真实 `noexec` 自动回退（需要 sudo、unshare 和 mount 权限；仓库须位于 `/tmp` 之外）。挂载仅存在于私有 mount namespace，不修改宿主 `/tmp`；测试使用 mock 下载和安装器，不联网、不修改已有 Agent 安装：
+
+```bash
+sudo unshare --mount --propagation private bash -c 'mount -t tmpfs -o noexec,nosuid,nodev tmpfs /tmp && bash tests/bootstrap_noexec_test.sh'
+```
 
 发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/迁移 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、三个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
 
@@ -65,6 +71,8 @@ sudo systemctl enable --now swallow-agent.service
 
 在 Monitor **原设备**上签发一次性注册凭据，不要新建设备；这样保留设备身份及历史数据。不要自动执行远程脚本。
 
+升级顺序：**先备份 Monitor 数据库，再升级 Monitor 至支持公钥认证的新版本，最后逐台迁移 Agent**。新 Monitor 不兼容旧 Token，尚未迁移的旧 Agent 会暂时离线；请安排维护窗口并保留数据库备份，迁移完成后确认原设备恢复上报。
+
 
 ```bash
 printf %s '<原设备的一次性注册令牌>' | sudo bash migrate-token-to-key.sh --binary ./swallow-agent --report-url wss://example.com/report --enrollment-token-stdin
@@ -89,6 +97,8 @@ sudo journalctl -u swallow-agent.service -f
 
 
 ## 运行
+
+查看版本：`./swallow-agent -version`（Windows：`.\swallow-agent.exe -version`）。只打印版本并退出，无需配置、私钥或网络，不能与其他参数组合。普通源码构建默认为 `dev`；release 所有平台通过 `-ldflags -X github.com/M1saka10010/SwallowAgent/buildinfo.Version=<tag>` 注入校验后的实际 tag，与 `system_info.data.agentVersion` 使用同一版本来源。
 
 手动自动注册（将令牌通过标准输入传入）：
 
@@ -148,7 +158,8 @@ isDebug: false
 
 | 参数 | 说明 |
 | ---- | ---- |
-| `-c` | 指定 YAML 配置文件路径（必填） |
+| `-version` | 单独打印 Agent 版本并退出，无需配置 |
+| `-c` | 指定 YAML 配置文件路径（采集上报时必填） |
 | `-enroll` | 自动注册的 report URL；与 `-private-key` 和 `-enrollment-token-stdin` 同时使用 |
 | `-private-key` | 自动注册使用的私钥文件，存在则复用 |
 | `-enrollment-token-stdin` | 从标准输入读取一次性令牌，不提供令牌命令行参数 |
@@ -222,6 +233,7 @@ isDebug: true
   "type": "system_info",
   "data": {
     "hostname": "my-server",
+    "agentVersion": "dev",
     "uptime": 123456,
     "bootTime": 1700000000,
     "modelName": "Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz",
@@ -243,6 +255,7 @@ isDebug: true
 | 字段 | 类型 | 说明 |
 | ---- | ---- | ---- |
 | `hostname` | `string` | 主机名 |
+| `agentVersion` | `string` | Agent 构建版本；源码默认 `dev`，release 为实际 tag，与 `-version` 一致 |
 | `uptime` | `uint64` | 系统运行时间（秒） |
 | `bootTime` | `uint64` | 系统启动时间（Unix 时间戳，秒） |
 | `modelName` | `string` | CPU 型号名称 |

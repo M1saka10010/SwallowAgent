@@ -3,9 +3,37 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEST=$(mktemp -d)
 trap 'rm -rf -- "$TEST"' EXIT
-mkdir "$TEST/bin" "$TEST/assets" "$TEST/tmp"
+mkdir "$TEST/bin" "$TEST/assets" "$TEST/tmp" "$TEST/fallback" "$TEST/opt"
+export TEST REAL_MKTEMP=$(command -v mktemp) REAL_CHMOD=$(command -v chmod)
 export FIXTURE="$TEST/assets" RESULT="$TEST/result" TMPDIR="$TEST/tmp"
 export PATH="$TEST/bin:$PATH"
+cat > "$TEST/bin/mktemp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+template=${@: -1}
+printf '%s\n' "$template" >> "$TEST/candidates"
+case "$template" in
+    /var/tmp/*) template="$TEST/fallback/${template##*/}" ;;
+    /opt/*) template="$TEST/opt/${template##*/}" ;;
+esac
+[ "${DENY_CREATE:-}" != all ] || exit 1
+dir=$("$REAL_MKTEMP" -d -- "$template")
+[ "$(stat -c %a "$dir")" = 700 ]
+printf '%s\n' "$dir" >> "$TEST/created"
+printf '%s\n' "$dir"
+EOF
+cat > "$TEST/bin/chmod" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+"$REAL_CHMOD" "$@"
+file=${@: -1}
+if [[ "$file" == */probe ]]; then
+    case "${DENY_EXEC:-}:$file" in
+        all:*|first:"$TEST/tmp/"*|two:"$TEST/tmp/"*|two:"$TEST/fallback/"*)
+            "$REAL_CHMOD" 600 "$file" ;;
+    esac
+fi
+EOF
 cat > "$TEST/bin/uname" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in -s) echo "${MOCK_OS:-Linux}" ;; -m) echo "${MOCK_ARCH:-x86_64}" ;; esac
@@ -14,6 +42,7 @@ cat > "$TEST/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ " $* " == *" --proto =https "* && " $* " == *" --proto-redir =https "* ]]
+echo download >> "$TEST/downloads"
 [[ "$1" == --disable ]]
 OUT=''
 while [ "$#" -gt 0 ]; do
@@ -29,6 +58,7 @@ cat > "$FIXTURE/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "$1" = --binary ] && [ -x "$2" ]
+"$2"
 [[ "$2" == *"swallow-agent-linux-${EXPECT_ARCH:-amd64}" ]]
 TOKEN=$(cat)
 [ "$TOKEN" = secret-fixture ]
@@ -41,7 +71,7 @@ fi
 exit "${CHILD_EXIT:-0}"
 EOF
 cp "$FIXTURE/install.sh" "$FIXTURE/migrate-token-to-key.sh"
-printf 'mock binary\n' > "$FIXTURE/swallow-agent-linux-amd64"
+printf '#!/bin/sh\nexit 0\n' > "$FIXTURE/swallow-agent-linux-amd64"
 cp "$FIXTURE/swallow-agent-linux-amd64" "$FIXTURE/swallow-agent-linux-arm64"
 (cd "$FIXTURE"; sha256sum install.sh migrate-token-to-key.sh swallow-agent-* > checksums.txt)
 cp "$FIXTURE/checksums.txt" "$TEST/checksums"
@@ -50,14 +80,36 @@ run() {
     local want=$1 status=0
     shift
     rm -f "$RESULT"
+    : > "$TEST/downloads"
+    : > "$TEST/candidates"
+    : > "$TEST/created"
     printf %s secret-fixture | bash "$ROOT/bootstrap.sh" "$@" >"$TEST/log" 2>&1 || status=$?
     [ "$status" -eq "$want" ] || { cat "$TEST/log"; echo "unexpected status $status != $want"; exit 1; }
     ! grep -q secret-fixture "$TEST/log"
     [ -z "$(ls -A "$TMPDIR")" ]
+    [ -z "$(ls -A "$TEST/fallback")" ]
+    [ -z "$(ls -A "$TEST/opt")" ]
+    while IFS= read -r dir; do [ ! -e "$dir" ]; done < "$TEST/created"
 }
 ARGS=(--version v9.9.9-test --enrollment-token-stdin --report-url wss://example.com/report)
 run 0 "${ARGS[@]}"
 grep -qx install.sh "$RESULT"
+DENY_EXEC=first run 0 "${ARGS[@]}"
+[ "$(wc -l < "$TEST/candidates")" -eq 2 ]
+grep -q '^/var/tmp/' "$TEST/candidates"
+DENY_EXEC=two run 0 "${ARGS[@]}"
+[ "$(wc -l < "$TEST/candidates")" -eq 3 ]
+grep -q '^/opt/' "$TEST/candidates"
+for failure in exec create; do
+    if [ "$failure" = exec ]; then DENY_EXEC=all run 1 "${ARGS[@]}"
+    else DENY_CREATE=all run 1 "${ARGS[@]}"; fi
+    [ ! -e "$RESULT" ]
+    [ ! -s "$TEST/downloads" ]
+    [ "$(wc -l < "$TEST/candidates")" -eq 3 ]
+    grep -q 'No writable executable temporary directory' "$TEST/log"
+done
+DENY_EXEC=first CORRUPT_ASSET=install.sh run 1 "${ARGS[@]}"
+DENY_EXEC=first CHILD_EXIT=37 run 37 "${ARGS[@]}"
 MOCK_ARCH=aarch64 EXPECT_ARCH=arm64 run 0 "${ARGS[@]}" --mode migrate-token-to-key
 grep -qx migrate-token-to-key.sh "$RESULT"
 CHILD_EXIT=37 run 37 "${ARGS[@]}"

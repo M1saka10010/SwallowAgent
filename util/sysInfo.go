@@ -1,6 +1,7 @@
 package util
 
 import (
+	"github.com/M1saka10010/SwallowAgent/buildinfo"
 	"github.com/M1saka10010/SwallowAgent/model"
 
 	"strings"
@@ -39,6 +40,7 @@ func GetSystemInfo() (*model.SysInfo, error) {
 
 	// 构建并返回系统信息
 	return &model.SysInfo{
+		AgentVersion:         buildinfo.Version,
 		Hostname:             hostInfo.Hostname,
 		Uptime:               hostInfo.Uptime,
 		BootTime:             hostInfo.BootTime,

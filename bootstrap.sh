@@ -38,9 +38,9 @@ esac
 for command in curl sha256sum mktemp bash; do
     command -v "$command" >/dev/null || error 'Missing required download or verification tool'
 done
-WORK=$(mktemp -d)
+WORK=''
 CHILD=''
-cleanup() { rm -rf -- "$WORK"; }
+cleanup() { if [ -n "$WORK" ]; then rm -rf -- "$WORK"; fi; }
 forward() {
     trap '' INT TERM HUP
     if [ -n "$CHILD" ]; then
@@ -54,6 +54,21 @@ trap cleanup EXIT
 trap 'forward INT 130' INT
 trap 'forward TERM 143' TERM
 trap 'forward HUP 129' HUP
+for PARENT in "${TMPDIR:-/tmp}" /var/tmp /opt; do
+    if ! WORK=$(mktemp -d -- "${PARENT%/}/swallow-bootstrap.XXXXXXXXXX" 2>/dev/null); then
+        WORK=''
+        continue
+    fi
+    if { printf '#!/bin/sh\nexit 0\n' > "$WORK/probe" &&
+         chmod 700 "$WORK/probe" &&
+         "$WORK/probe" </dev/null; } 2>/dev/null; then
+        rm -f -- "$WORK/probe"
+        break
+    fi
+    cleanup
+    WORK=''
+done
+[ -n "$WORK" ] || error 'No writable executable temporary directory available (TMPDIR or /tmp, /var/tmp, /opt); nothing downloaded'
 BASE="https://github.com/M1saka10010/SwallowAgent/releases/download/$VERSION"
 download() {
     curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 --output "$WORK/$1" "$BASE/$1" </dev/null &

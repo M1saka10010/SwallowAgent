@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/M1saka10010/SwallowAgent/buildinfo"
 	"github.com/M1saka10010/SwallowAgent/model"
 	"github.com/M1saka10010/SwallowAgent/service"
 	"github.com/M1saka10010/SwallowAgent/util"
@@ -21,6 +22,7 @@ import (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "打印 Agent 版本并退出（不能组合其他参数）")
 	configPath := flag.String("c", "", "指定 YAML 配置文件路径")
 	generateKey := flag.String("generate-key", "", "独占创建 Ed25519 私钥并打印公钥")
 	showKey := flag.String("show-public-key", "", "读取私钥并打印公钥")
@@ -35,6 +37,20 @@ func main() {
 	enrollConfig := flag.String("enroll-token-migration", "", "使用已迁移配置注册或验证既有身份")
 	checkToken := flag.Bool("check-enrollment-token", false, "校验 stdin 凭据并输出到 stdout（供安装器私有暂存）")
 	flag.Parse()
+	versionSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "version" {
+			versionSet = true
+		}
+	})
+	if versionSet {
+		if !*showVersion || flag.NFlag() != 1 || flag.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "-version 必须单独使用且为 true，不能组合其他参数")
+			os.Exit(1)
+		}
+		fmt.Println(buildinfo.Version)
+		return
+	}
 	if *checkToken {
 		if flag.NFlag() != 1 || flag.NArg() != 0 {
 			fmt.Fprintln(os.Stderr, "凭据校验不能组合其他命令")
