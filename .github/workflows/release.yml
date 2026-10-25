@@ -55,7 +55,7 @@ jobs:
       - if: runner.os == 'Linux'
         shell: bash
         run: |
-          bash -n bootstrap.sh install.sh migrate-token-to-key.sh tests/bootstrap_test.sh
+          bash -n bootstrap.sh install.sh migrate-token-to-key.sh upgrade.sh tests/bootstrap_test.sh
           bash tests/bootstrap_test.sh
           go test -race ./...
           sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" GOTOOLCHAIN=local go test -count=1 ./...
@@ -82,9 +82,9 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/swallow-agent-linux-amd64 .
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/swallow-agent-linux-arm64 .
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/swallow-agent-windows-amd64.exe .
-          cp bootstrap.sh install.sh migrate-token-to-key.sh dist/
+          cp bootstrap.sh install.sh migrate-token-to-key.sh upgrade.sh dist/
           cd dist
-          sha256sum swallow-agent-* bootstrap.sh install.sh migrate-token-to-key.sh > checksums.txt
+          sha256sum swallow-agent-* bootstrap.sh install.sh migrate-token-to-key.sh upgrade.sh > checksums.txt
       - uses: actions/upload-artifact@v4
         with:
           name: release-assets

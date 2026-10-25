@@ -44,7 +44,26 @@ bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任
 sudo unshare --mount --propagation private bash -c 'mount -t tmpfs -o noexec,nosuid,nodev tmpfs /tmp && bash tests/bootstrap_noexec_test.sh'
 ```
 
-发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/迁移 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、三个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
+发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/迁移/升级 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、四个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
+
+### 常规公钥版本升级（无需注册令牌）
+
+审核并下载同一目标 release 的 bootstrap 后执行：
+
+```bash
+sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode upgrade
+# 可选：追加 --github-proxy "$GITHUB_PROXY"
+```
+
+契约为 `--version TAG --mode upgrade [--github-proxy PREFIX]`，拒绝 token、report-url、dev-mode 参数。Monitor 必须检查目标 release 中 **upgrade.sh 资产存在** 才启用常规升级能力，不能仅看版本字符串或 bootstrap.sh 是否存在。旧 release 的 bootstrap 不支持代理参数；安装/迁移代理选项也必须以该新能力门禁保护，不应向旧脚本传入新参数。发布资产现为四个脚本（bootstrap/install/migrate-token-to-key/upgrade）、三个 binary 和 checksums.txt。
+
+`--github-proxy` 为 HTTPS URL 前缀（主机、可选端口和简单路径；禁止凭据、查询、片段、空白、点段），下载 URL 为 `PREFIX/原始完整GitHub资产URL`。适用于新 bootstrap 的三种模式，覆盖 checksums、binary、模式脚本全部下载；初次 bootstrap 下载由命令生成方使用相同前缀，bootstrap 不能代理它自身此前的下载。仅信任经过审核的代理，它可同时修改清单与资产；SHA256 不是独立签名。
+
+仅支持 Linux systemd amd64/arm64 和 `/opt/swallow-agent` 下由 install 创建的 0700 布局，或完成公钥迁移后的 0755 布局。精确匹配 unit、迁移服务链接、布局标记和默认私钥路径；拒绝 drop-in、待 reload 单元、未知 fragment、不安全所有权/权限、硬链接/非标准符号链接。路径检查是保守格式检查，不是完整 YAML schema 验证。共用 `.install.lock`；下载、SHA256 和 15 秒有界候选 `-version` 校验全部发生在停服之前。当前版本也必须能返回严格 SemVer，拒绝 `dev`、未知版本和 SemVer 降级；允许同版本重装，构建元数据不参与排序。
+
+只原子替换 binary，保留 config、agent.key、unit、链接和 enable 状态。原 active 服务启动后检查两次；原 inactive 服务保持停止，不启动候选验证。active **不代表认证、上报或入库成功**，应在 Monitor 确认版本和新数据。失败或可捕获信号尝试恢复原 binary 与运行状态，失败会显式告警；成功和停服后失败均保留 0700 `.upgrade.*` 中原 binary，确认稳定后人工清理。SIGKILL/断电不能自动回滚。升级后迁移完成标记的旧 binary hash 不再匹配，**不要再重跑迁移脚本**，也不会为此修改原 key/config/迁移标记。
+
+高级本地模式：`sudo bash upgrade.sh --binary PATH --version TAG --sha256 TRUSTED_SHA256`，摘要必须来自可信渠道。测试门禁包含 `go test -run TestUpgrade -count=1 .`（root 下运行隔离路径和 mock systemctl，绝不操作真实服务）、`bash tests/bootstrap_test.sh` 及全量 Go 测试。
 
 ### Linux 安装（本地构建版本）
 

@@ -4,15 +4,17 @@ umask 077
 error() { printf '%s\n' "$*" >&2; exit 1; }
 VERSION=''
 MODE=install
+GITHUB_PROXY=''
 ARGS=()
 TOKEN_STDIN=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --version|--mode|--report-url)
+        --version|--mode|--report-url|--github-proxy)
             [ "$#" -ge 2 ] || error 'Missing argument value'
             case "$1" in
                 --version) VERSION=$2 ;;
                 --mode) MODE=$2 ;;
+                --github-proxy) GITHUB_PROXY=$2 ;;
                 --report-url) ARGS+=("$1" "$2") ;;
             esac
             shift 2 ;;
@@ -21,14 +23,23 @@ while [ "$#" -gt 0 ]; do
         -h|--help)
             echo 'Usage: bootstrap.sh --version TAG [--mode install|migrate-token-to-key] --report-url URL --enrollment-token-stdin [--dev-mode]'
             echo 'Local binary: use install.sh or migrate-token-to-key.sh --binary PATH directly.'
+            echo 'Upgrade: bootstrap.sh --version TAG --mode upgrade [--github-proxy HTTPS_PREFIX]'
             exit 0 ;;
         *) error 'Unsupported argument' ;;
     esac
 done
 SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*))*)?(\+[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*)?$'
 [[ "$VERSION" =~ $SEMVER ]] || error 'An explicit release version is required (not latest)'
-case "$MODE" in install|migrate-token-to-key) ;; *) error 'Unsupported mode' ;; esac
-[ "$TOKEN_STDIN" = true ] || error 'Required: --enrollment-token-stdin'
+case "$MODE" in
+    install|migrate-token-to-key) [ "$TOKEN_STDIN" = true ] || error 'Required: --enrollment-token-stdin' ;;
+    upgrade) [ "${#ARGS[@]}" -eq 0 ] || error 'Upgrade does not accept enrollment/report/dev arguments' ;;
+    *) error 'Unsupported mode' ;;
+esac
+if [ -n "$GITHUB_PROXY" ]; then
+    PROXY_PATTERN='^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*/?$'
+    [[ "$GITHUB_PROXY" =~ $PROXY_PATTERN ]] || error 'Invalid HTTPS GitHub proxy prefix'
+    [[ "/$GITHUB_PROXY/" != *'/../'* && "/$GITHUB_PROXY/" != *'/./'* ]] || error 'Invalid proxy path'
+fi
 [ "$(uname -s)" = Linux ] || error 'Only Linux is supported'
 case "$(uname -m)" in
     x86_64|amd64) ARCH=amd64 ;;
@@ -40,15 +51,20 @@ for command in curl sha256sum mktemp bash; do
 done
 WORK=''
 CHILD=''
+LAUNCHING=0
+PENDING=''
 cleanup() { if [ -n "$WORK" ]; then rm -rf -- "$WORK"; fi; }
 forward() {
+    PENDING=${PENDING:-$2}
+    # Do not ignore signals before fork: the child would inherit SIG_IGN.
+    [ "$LAUNCHING" -eq 0 ] || return 0
     trap '' INT TERM HUP
     if [ -n "$CHILD" ]; then
         # Async shells can inherit ignored INT; TERM also runs migration rollback.
         kill -s TERM "$CHILD" 2>/dev/null || true
         wait "$CHILD" 2>/dev/null || true
     fi
-    exit "$2"
+    exit "$PENDING"
 }
 trap cleanup EXIT
 trap 'forward INT 130' INT
@@ -70,9 +86,13 @@ for PARENT in "${TMPDIR:-/tmp}" /var/tmp /opt; do
 done
 [ -n "$WORK" ] || error 'No writable executable temporary directory available (TMPDIR or /tmp, /var/tmp, /opt); nothing downloaded'
 BASE="https://github.com/M1saka10010/SwallowAgent/releases/download/$VERSION"
+[ -z "$GITHUB_PROXY" ] || BASE="${GITHUB_PROXY%/}/$BASE"
 download() {
+    LAUNCHING=1
     curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 --output "$WORK/$1" "$BASE/$1" </dev/null &
     CHILD=$!
+    LAUNCHING=0
+    [ -z "$PENDING" ] || forward TERM "$PENDING"
     local status=0
     wait "$CHILD" || status=$?
     CHILD=''
@@ -98,10 +118,17 @@ download "$BINARY"
 download "$SCRIPT"
 verify "$BINARY"
 verify "$SCRIPT"
+if [ "$MODE" = upgrade ]; then
+    HASH=$(sha256sum "$WORK/$BINARY")
+    ARGS=(--version "$VERSION" --sha256 "${HASH%% *}")
+fi
 chmod 700 "$WORK/$BINARY"
 exec 3<&0
+LAUNCHING=1
 bash "$WORK/$SCRIPT" --binary "$WORK/$BINARY" "${ARGS[@]}" <&3 3<&- &
 CHILD=$!
+LAUNCHING=0
+[ -z "$PENDING" ] || forward TERM "$PENDING"
 STATUS=0
 wait "$CHILD" || STATUS=$?
 CHILD=''
