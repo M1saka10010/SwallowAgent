@@ -126,7 +126,7 @@ func TestInstallerRetry(t *testing.T) {
 
 func TestInstallerRejectsUpgrade(t *testing.T) {
 	out, err := exec.Command("bash", "install.sh", "--upgrade").CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "migrate-token-to-key.sh") {
+	if err == nil || !strings.Contains(string(out), "通用升级不受支持") {
 		t.Fatalf("%v %s", err, out)
 	}
 }

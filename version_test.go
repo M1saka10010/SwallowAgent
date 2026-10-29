@@ -32,9 +32,7 @@ func TestVersionCLI(t *testing.T) {
 			for _, other := range [][]string{
 				{"-c", "missing.yaml"}, {"-generate-key", "key"}, {"-show-public-key", "key"},
 				{"-enroll", "invalid"}, {"-private-key", "key"}, {"-enrollment-token-stdin"},
-				{"-dev-mode"}, {"-prepare-token-migration", "old"}, {"-output-config", "new"},
-				{"-default-private-key", "key"}, {"-report-url", "invalid"},
-				{"-enroll-token-migration", "new"}, {"-check-enrollment-token"},
+				{"-dev-mode"}, {"-check-enrollment-token"},
 				{"extra"}, {"-c="}, {"-dev-mode=false"},
 			} {
 				for _, versionFlag := range []string{"-version", "-version=false"} {

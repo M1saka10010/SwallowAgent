@@ -30,11 +30,6 @@ func main() {
 	privateKey := flag.String("private-key", "", "注册使用的私钥路径，不存在则独占生成")
 	tokenStdin := flag.Bool("enrollment-token-stdin", false, "从标准输入读取一次性注册令牌")
 	devMode := flag.Bool("dev-mode", false, "允许 loopback 明文注册（仅开发）")
-	prepare := flag.String("prepare-token-migration", "", "严格迁移旧配置（不连接服务器）")
-	output := flag.String("output-config", "", "迁移配置输出路径，必须不存在")
-	defaultKey := flag.String("default-private-key", "", "旧配置缺少私钥时使用的路径")
-	reportURL := flag.String("report-url", "", "Token 迁移覆盖 reportUrl")
-	enrollConfig := flag.String("enroll-token-migration", "", "使用已迁移配置注册或验证既有身份")
 	checkToken := flag.Bool("check-enrollment-token", false, "校验 stdin 凭据并输出到 stdout（供安装器私有暂存）")
 	flag.Parse()
 	versionSet := false
@@ -64,18 +59,6 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Print(token)
-		return
-	}
-	if *prepare != "" || *output != "" || *defaultKey != "" || *reportURL != "" || *enrollConfig != "" {
-		if *configPath != "" || *generateKey != "" || *showKey != "" || *enrollURL != "" || *privateKey != "" || flag.NArg() != 0 {
-			fmt.Fprintln(os.Stderr, "Token 迁移命令不能组合其他命令")
-			os.Exit(1)
-		}
-		err := runTokenMigration(*prepare, *output, *defaultKey, *reportURL, *enrollConfig, *devMode, *tokenStdin)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
 		return
 	}
 	if *enrollURL != "" || *privateKey != "" || *tokenStdin || *devMode {

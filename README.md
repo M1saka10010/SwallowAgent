@@ -24,7 +24,7 @@ go build -o swallow-agent .
 
 ### 固定 Release 一键交付（Linux amd64 / arm64）
 
-公钥认证目标 release **尚未发布**；以下是发布后的接口，不代表任何目标版本已经存在。面板必须由管理员配置明确的 `AGENT_VERSION`（带 v 前缀的严格 SemVer，可带 `-预发布标识` 和 `+构建元数据`），未配置时禁用 release 命令；不得默认 `latest` 或将旧 Token 版本 v0.0.2 当作目标。
+面板必须由管理员配置明确的 `AGENT_VERSION`（带 v 前缀的严格 SemVer，可带 `-预发布标识` 和 `+构建元数据`），未配置时禁用 release 命令；不得默认 `latest` 或将旧 Token 版本 v0.0.2 当作目标。
 
 先设置 `AGENT_VERSION` 为已审核且实际发布的 tag，并运行 `sudo -v` 完成权限认证。下面一条命令交互读取一次性令牌（不回显），下载**同一固定 tag** 的 bootstrap，再由它下载对应架构 binary、install.sh 和 checksums.txt，校验后安装：
 
@@ -32,9 +32,9 @@ go build -o swallow-agent .
 (set -euo pipefail; : "${AGENT_VERSION:?请先设置已审核且实际发布的目标 tag}"; [[ "$AGENT_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*))*)?(\+[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*)?$ ]]; read -rsp '一次性注册令牌: ' TOKEN; printf '\n' >&2; SCRIPT=$(curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 300 "https://github.com/M1saka10010/SwallowAgent/releases/download/$AGENT_VERSION/bootstrap.sh"); printf %s "$TOKEN" | sudo -n bash -c "$SCRIPT" -- --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin)
 ```
 
-迁移原设备时只将 `--mode install` 改为 `--mode migrate-token-to-key`，使用原设备签发的凭据；其余限制和回滚边界见下文。面板可将同一模板中的版本、地址和模式替换为经过校验且正确 shell quoting 的值，凭据只能通过 stdin；脚本代码通过 `bash -c` 参数传入，**不能用 `curl | bash` 与凭据争用 stdin**。也可先审核下载的 bootstrap，再执行 `printf %s "$TOKEN" | sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin`。不要开启 `set -x` 或记录凭据。
+面板可将同一模板中的版本、地址和模式替换为经过校验且正确 shell quoting 的值，凭据只能通过 stdin；脚本代码通过 `bash -c` 参数传入，**不能用 `curl | bash` 与凭据争用 stdin**。也可先审核下载的 bootstrap，再执行 `printf %s "$TOKEN" | sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode install --report-url wss://example.com/report --enrollment-token-stdin`。不要开启 `set -x` 或记录凭据。
 
-bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任一下载失败、缺失/重复摘要或 SHA-256 不符均不执行资产。下载前先在 `${TMPDIR:-/tmp}` 创建 0700 私有临时目录，并直接执行探测脚本（不读取凭据 stdin）；不可写或 `noexec` 时依次尝试 `/var/tmp`、`/opt`。全部失败则明确报错且不下载。不会修改挂载选项、已有目录权限或预先创建 Agent 安装目录；只清理本次 mktemp 创建的目录。正常/失败/可捕获信号退出会清理；子脚本退出码原样返回。INT/TERM/HUP 转交子进程 TERM 以触发迁移回滚，入口分别退出 130/143/129；SIGKILL/断电无法清理。`--binary` 本地高级模式保留在下述两个原始脚本中，不经 bootstrap 下载。
+bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任一下载失败、缺失/重复摘要或 SHA-256 不符均不执行资产。下载前先在 `${TMPDIR:-/tmp}` 创建 0700 私有临时目录，并直接执行探测脚本（不读取凭据 stdin）；不可写或 `noexec` 时依次尝试 `/var/tmp`、`/opt`。全部失败则明确报错且不下载。不会修改挂载选项、已有目录权限或预先创建 Agent 安装目录；只清理本次 mktemp 创建的目录。正常/失败/可捕获信号退出会清理；子脚本退出码原样返回。INT/TERM/HUP 转交子进程 TERM 以触发子脚本回滚与清理，入口分别退出 130/143/129；SIGKILL/断电无法清理。`--binary` 本地高级模式保留在下述两个原始脚本中，不经 bootstrap 下载。
 
 **信任边界：** 上述初次 bootstrap 依赖 HTTPS、GitHub 仓库/release 管理者和本机 CA 信任；它不能证明自己未被篡改。同一 release 的 checksums.txt 只校验下载资产与该清单一致，**不是独立签名**，不能抵御发布账户被攻陷或资产与清单同时替换；固定 tag 也不保证资产永不可变。更严格环境应先从独立可信渠道核验 bootstrap/资产摘要或审核源码后使用本地 `--binary`，不要把在线同源摘要描述为供应链签名验证。
 
@@ -44,7 +44,7 @@ bootstrap 仅允许 HTTPS（包括重定向），拒绝未知系统/架构；任
 sudo unshare --mount --propagation private bash -c 'mount -t tmpfs -o noexec,nosuid,nodev tmpfs /tmp && bash tests/bootstrap_noexec_test.sh'
 ```
 
-发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/迁移/升级 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、四个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
+发布维护者须先创建指向审核 commit 的 tag，再手动运行 `.github/workflows/release.yml` 并传入该已有 tag。流程解析 tag commit，Linux/Windows 原生 `go test ./...` 和 `go vet ./...` 门禁、Linux shell 语法及 mock 下载测试通过后才构建；Linux 另以 root 运行安装/升级 mock 测试避免 skip。所有构建与脚本来自同一 commit，发布前复核 tag 未移动，并显式设置 `target_commitish`。资产包括 Linux amd64/arm64、Windows amd64 binary、三个脚本和 checksums.txt；此改动本身不创建 tag 或发布。
 
 ### 常规公钥版本升级（无需注册令牌）
 
@@ -55,13 +55,13 @@ sudo bash bootstrap.sh --version "$AGENT_VERSION" --mode upgrade
 # 可选：追加 --github-proxy "$GITHUB_PROXY"
 ```
 
-契约为 `--version TAG --mode upgrade [--github-proxy PREFIX]`，拒绝 token、report-url、dev-mode 参数。Monitor 必须检查目标 release 中 **upgrade.sh 资产存在** 才启用常规升级能力，不能仅看版本字符串或 bootstrap.sh 是否存在。旧 release 的 bootstrap 不支持代理参数；安装/迁移代理选项也必须以该新能力门禁保护，不应向旧脚本传入新参数。发布资产现为四个脚本（bootstrap/install/migrate-token-to-key/upgrade）、三个 binary 和 checksums.txt。
+契约为 `--version TAG --mode upgrade [--github-proxy PREFIX]`，拒绝 token、report-url、dev-mode 参数。Monitor 必须检查目标 release 中 **upgrade.sh 资产存在** 才启用常规升级能力，不能仅看版本字符串或 bootstrap.sh 是否存在。旧 release 的 bootstrap 不支持代理参数；安装代理选项也必须以该新能力门禁保护，不应向旧脚本传入新参数。发布资产现为三个脚本（bootstrap/install/upgrade）、三个 binary 和 checksums.txt。
 
 `--github-proxy` 为 HTTPS URL 前缀（主机、可选端口和简单路径；禁止凭据、查询、片段、空白、点段），下载 URL 为 `PREFIX/原始完整GitHub资产URL`。适用于新 bootstrap 的三种模式，覆盖 checksums、binary、模式脚本全部下载；初次 bootstrap 下载由命令生成方使用相同前缀，bootstrap 不能代理它自身此前的下载。仅信任经过审核的代理，它可同时修改清单与资产；SHA256 不是独立签名。
 
 仅支持 Linux systemd amd64/arm64 和 `/opt/swallow-agent` 下由 install 创建的 0700 布局，或完成公钥迁移后的 0755 布局。精确匹配 unit、迁移服务链接、布局标记和默认私钥路径；拒绝 drop-in、待 reload 单元、未知 fragment、不安全所有权/权限、硬链接/非标准符号链接。路径检查是保守格式检查，不是完整 YAML schema 验证。共用 `.install.lock`；下载、SHA256 和 15 秒有界候选 `-version` 校验全部发生在停服之前。当前版本也必须能返回严格 SemVer，拒绝 `dev`、未知版本和 SemVer 降级；允许同版本重装，构建元数据不参与排序。
 
-只原子替换 binary，保留 config、agent.key、unit、链接和 enable 状态。原 active 服务启动后检查两次；原 inactive 服务保持停止，不启动候选验证。active **不代表认证、上报或入库成功**，应在 Monitor 确认版本和新数据。失败或可捕获信号尝试恢复原 binary 与运行状态，失败会显式告警；成功和停服后失败均保留 0700 `.upgrade.*` 中原 binary，确认稳定后人工清理。SIGKILL/断电不能自动回滚。升级后迁移完成标记的旧 binary hash 不再匹配，**不要再重跑迁移脚本**，也不会为此修改原 key/config/迁移标记。
+只原子替换 binary，保留 config、agent.key、unit、链接和 enable 状态。原 active 服务启动后检查两次；原 inactive 服务保持停止，不启动候选验证。active **不代表认证、上报或入库成功**，应在 Monitor 确认版本和新数据。失败或可捕获信号尝试恢复原 binary 与运行状态，失败会显式告警；成功和停服后失败均保留 0700 `.upgrade.*` 中原 binary，确认稳定后人工清理。SIGKILL/断电不能自动回滚。升级后 Token 迁移完成标记的旧 binary hash 不再匹配，完成过迁移的主机**不要再重跑旧版迁移脚本**；升级也不会修改原 key/config。
 
 高级本地模式：`sudo bash upgrade.sh --binary PATH --version TAG --sha256 TRUSTED_SHA256`，摘要必须来自可信渠道。测试门禁包含 `go test -run TestUpgrade -count=1 .`（root 下运行隔离路径和 mock systemctl，绝不操作真实服务）、`bash tests/bootstrap_test.sh` 及全量 Go 测试。
 
@@ -84,28 +84,9 @@ sudo systemctl enable --now swallow-agent.service
 
 令牌是短期 bearer 凭据：持有者可抢先绑定自己的公钥，签名只证明私钥持有，不能防止被窃令牌抢注。请通过可信渠道传递，避免聊天、日志、shell 历史和录屏泄露；不要开启 shell tracing。Agent 不把令牌写入配置或日志。疑似泄露应重新签发令牌；若已被绑定，应先核查设备与公钥，不能把重试当作抢注修复。
 
-### Token → 公钥认证专用迁移（保留原设备）
+### 从 v0.0.2 Token 旧版本升级
 
-来源为 [v0.0.2](https://github.com/M1saka10010/SwallowAgent/releases/tag/v0.0.2) 的标准 Linux Token 安装；目标公钥认证 breaking 版本尚未发布，不预设版本号。请从当前源码构建可信本地二进制，不自动下载 latest（v0.0.2 是旧 Token 版本）。脚本按配置 schema 和标准布局判断来源，不声称验证旧二进制版本或哈希。
-
-在 Monitor **原设备**上签发一次性注册凭据，不要新建设备；这样保留设备身份及历史数据。不要自动执行远程脚本。
-
-升级顺序：**先备份 Monitor 数据库，再升级 Monitor 至支持公钥认证的新版本，最后逐台迁移 Agent**。新 Monitor 不兼容旧 Token，尚未迁移的旧 Agent 会暂时离线；请安排维护窗口并保留数据库备份，迁移完成后确认原设备恢复上报。
-
-
-```bash
-printf %s '<原设备的一次性注册令牌>' | sudo bash migrate-token-to-key.sh --binary ./swallow-agent --report-url wss://example.com/report --enrollment-token-stdin
-```
-
-迁移保留 paths、interfaceNames、interval、isDebug 及主机采集身份，删除旧 token，使用安装目录内 agent.key；失败后已有私钥始终复用。URL 可省略以复用旧合法 wss 地址，前端命令始终提供 URL；旧 ws 地址需改为 wss，开发仅 loopback 可追加 --dev-mode。未知字段、重复键、多文档、非法配置拒绝，错误不回显旧 token。
-
-仅支持默认 /opt/swallow-agent 的 0755 目录、0600 config.yml、精确指向目录内 unit 的 systemd 链接及 v0.0.2 原样 unit。首次必须有非空 token，不能含 privateKeyPath。自定义路径、unit、drop-in、不安全所有权/权限均拒绝。不是通用升级工具，任意已公钥化安装不能通过它更新版本；install.sh --upgrade 也明确拒绝并指向本迁移脚本。
-
-停服前有界校验凭据、严格验证配置/私钥并暂存本地二进制；互斥锁防止并发。备份目录 0700，旧 binary/config/unit 备份 0600。停服后注册，并在 45 秒总预算内实际采集、认证并发送 system_info/system_usage，再替换文件；重启后重复检查服务状态，启动后立即失败会触发回滚。当前上报协议没有入库 ACK，因此发送成功不等于服务器持久化确认，也不是长期运行保证。原 inactive 服务验证后恢复停止，unit、链接、目录权限、enable 状态不变。成功写入私有 .token-to-key-complete 标记，记录参数及已安装 binary/config/key/unit 的摘要；同次迁移重跑仅确认文件和服务状态，不注册、不重启、不安装所传另一版本。
-
-注册、替换、启动失败或 TERM 会取消注册子进程并本地回滚，保留生成的私钥供重试。**服务端绑定无法回滚**，旧 Token 服务可能已无法认证；必须保留同一私钥，必要时重新签发原设备凭据。备份含旧凭据，确认稳定后妥善清理。断电/SIGKILL 无法触发回滚，须从私有备份手动恢复。
-
-Linux 内部预检接口：`swallow-agent -prepare-token-migration OLD -output-config NEW -default-private-key PATH -enrollment-token-stdin [-report-url URL] [-dev-mode]`。NEW 必须不存在；预检不读取 stdin、不联网，但会生成并保留迁移私钥。`-enroll-token-migration NEW -enrollment-token-stdin` 仅供脚本注册迁移配置，必须提供凭据开关；通用注册仍使用 `-enroll`。
+自 v0.1.2 起移除 Token 到公钥的迁移渠道（迁移脚本、bootstrap `--mode migrate-token-to-key` 与 Monitor 界面命令）。仍在 v0.0.2 的设备请 git 检出过渡版本 v0.1.1（`git clone` 本仓库后 `git checkout v0.1.1`），按该版本的 README 与 release 资产完成迁移，之后即可使用常规升级；已公钥化的设备不受影响。
 
 查看运行状态与日志：
 
@@ -144,7 +125,7 @@ POSIX 手动运行：
 
 ### Windows 手动运行
 
-Windows 支持密钥生成、自动注册和前台采集上报；`install.sh` 与 `migrate-token-to-key.sh` 仍仅用于 Linux/systemd，不安装 Windows 服务。运行账户需要有私钥读取权限；Agent 不要求文件所有者与运行账户相同，也不会修改已有文件权限。
+Windows 支持密钥生成、自动注册和前台采集上报；`install.sh` 与 `upgrade.sh` 仅用于 Linux/systemd，不安装 Windows 服务。运行账户需要有私钥读取权限；Agent 不要求文件所有者与运行账户相同，也不会修改已有文件权限。
 
 在可信目录内放置 `swallow-agent.exe`，从 Monitor 原设备或新设备取得一次性注册凭据，通过 PowerShell 执行（凭据属于敏感信息，避免保存到命令历史）：
 

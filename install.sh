@@ -8,7 +8,7 @@ TOKEN_STDIN=false
 DEV_MODE=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --upgrade) error "通用升级不受支持；Token 迁移请使用 migrate-token-to-key.sh" ;;
+        --upgrade) error "通用升级不受支持；请使用 bootstrap.sh --mode upgrade 或本地 upgrade.sh" ;;
         --enrollment-token-stdin) TOKEN_STDIN=true; shift ;;
         --dev-mode) DEV_MODE=true; shift ;;
         --binary|--report-url)

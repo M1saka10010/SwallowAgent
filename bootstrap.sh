@@ -21,8 +21,8 @@ while [ "$#" -gt 0 ]; do
         --enrollment-token-stdin) TOKEN_STDIN=true; ARGS+=("$1"); shift ;;
         --dev-mode) ARGS+=("$1"); shift ;;
         -h|--help)
-            echo 'Usage: bootstrap.sh --version TAG [--mode install|migrate-token-to-key] --report-url URL --enrollment-token-stdin [--dev-mode]'
-            echo 'Local binary: use install.sh or migrate-token-to-key.sh --binary PATH directly.'
+            echo 'Usage: bootstrap.sh --version TAG [--mode install] --report-url URL --enrollment-token-stdin [--dev-mode]'
+            echo 'Local binary: use install.sh or upgrade.sh --binary PATH directly.'
             echo 'Upgrade: bootstrap.sh --version TAG --mode upgrade [--github-proxy HTTPS_PREFIX]'
             exit 0 ;;
         *) error 'Unsupported argument' ;;
@@ -31,7 +31,7 @@ done
 SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][A-Za-z0-9-]*))*)?(\+[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*)?$'
 [[ "$VERSION" =~ $SEMVER ]] || error 'An explicit release version is required (not latest)'
 case "$MODE" in
-    install|migrate-token-to-key) [ "$TOKEN_STDIN" = true ] || error 'Required: --enrollment-token-stdin' ;;
+    install) [ "$TOKEN_STDIN" = true ] || error 'Required: --enrollment-token-stdin' ;;
     upgrade) [ "${#ARGS[@]}" -eq 0 ] || error 'Upgrade does not accept enrollment/report/dev arguments' ;;
     *) error 'Unsupported mode' ;;
 esac
@@ -60,7 +60,7 @@ forward() {
     [ "$LAUNCHING" -eq 0 ] || return 0
     trap '' INT TERM HUP
     if [ -n "$CHILD" ]; then
-        # Async shells can inherit ignored INT; TERM also runs migration rollback.
+        # Async shells can inherit ignored INT; TERM lets the child clean up and roll back.
         kill -s TERM "$CHILD" 2>/dev/null || true
         wait "$CHILD" 2>/dev/null || true
     fi

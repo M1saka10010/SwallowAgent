@@ -67,7 +67,6 @@ printf '%s\n' "${0##*/}" > "$RESULT"
 if [ "${SIGNAL_STAGE:-}" = script ]; then source "$TEST/signal-child"; fi
 exit "${CHILD_EXIT:-0}"
 EOF
-cp "$FIXTURE/install.sh" "$FIXTURE/migrate-token-to-key.sh"
 cat > "$FIXTURE/upgrade.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -78,7 +77,7 @@ echo upgrade.sh > "$RESULT"
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$FIXTURE/swallow-agent-linux-amd64"
 cp "$FIXTURE/swallow-agent-linux-amd64" "$FIXTURE/swallow-agent-linux-arm64"
-(cd "$FIXTURE"; sha256sum install.sh migrate-token-to-key.sh upgrade.sh swallow-agent-* > checksums.txt)
+(cd "$FIXTURE"; sha256sum install.sh upgrade.sh swallow-agent-* > checksums.txt)
 cp "$FIXTURE/checksums.txt" "$TEST/checksums"
 chmod +x "$TEST/bin/"*
 run() {
@@ -127,8 +126,8 @@ for failure in exec create; do
 done
 DENY_EXEC=first CORRUPT_ASSET=install.sh run 1 "${ARGS[@]}"
 DENY_EXEC=first CHILD_EXIT=37 run 37 "${ARGS[@]}"
-MOCK_ARCH=aarch64 EXPECT_ARCH=arm64 run 0 "${ARGS[@]}" --mode migrate-token-to-key
-grep -qx migrate-token-to-key.sh "$RESULT"
+MOCK_ARCH=aarch64 EXPECT_ARCH=arm64 run 0 "${ARGS[@]}"
+grep -qx install.sh "$RESULT"
 CHILD_EXIT=37 run 37 "${ARGS[@]}"
 for asset in checksums.txt swallow-agent-linux-amd64 install.sh; do
     FAIL_ASSET=$asset run 1 "${ARGS[@]}"
