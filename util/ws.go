@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -40,9 +41,17 @@ type WSClient struct {
 	headers http.Header
 	key     ed25519.PrivateKey
 
-	mu      sync.Mutex // 保护 conn、写操作与 backoff
-	conn    *websocket.Conn
-	backoff time.Duration // 当前重连退避时长，连接成功后重置为 0
+	mu        sync.Mutex // 保护 conn、写操作与 backoff
+	conn      *websocket.Conn
+	backoff   time.Duration // 当前重连退避时长，连接成功后重置为 0
+	handlerMu sync.RWMutex
+	handler   func(string, json.RawMessage)
+}
+
+func (c *WSClient) SetMessageHandler(handler func(string, json.RawMessage)) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.handler = handler
 }
 
 // NewWSClient 创建一个 WebSocket 客户端
@@ -169,7 +178,7 @@ func (c *WSClient) readLoop(ctx context.Context, conn *websocket.Conn) {
 		default:
 		}
 		// 仅此 goroutine 读取该 conn，无需持有 WSClient.mu
-		_, _, err := conn.ReadMessage()
+		_, payload, err := conn.ReadMessage()
 		if err != nil {
 			// 连接出错，若仍为当前连接则丢弃以便重连
 			c.mu.Lock()
@@ -179,7 +188,18 @@ func (c *WSClient) readLoop(ctx context.Context, conn *websocket.Conn) {
 			c.mu.Unlock()
 			return
 		}
-		// 消息已读取并丢弃
+		var message struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(payload, &message) == nil {
+			c.handlerMu.RLock()
+			handler := c.handler
+			c.handlerMu.RUnlock()
+			if handler != nil {
+				handler(message.Type, message.Data)
+			}
+		}
 	}
 }
 

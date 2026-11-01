@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/M1saka10010/SwallowAgent/buildinfo"
+	"github.com/M1saka10010/SwallowAgent/maintenance"
 	"github.com/M1saka10010/SwallowAgent/model"
 	"github.com/M1saka10010/SwallowAgent/service"
 	"github.com/M1saka10010/SwallowAgent/util"
@@ -22,6 +23,17 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "-maintenance-capable" {
+		fmt.Println("maintenance-v1")
+		return
+	}
+	if len(os.Args) == 3 && os.Args[1] == "-maintenance-worker" {
+		if err := maintenance.Worker(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	showVersion := flag.Bool("version", false, "打印 Agent 版本并退出（不能组合其他参数）")
 	configPath := flag.String("c", "", "指定 YAML 配置文件路径")
 	generateKey := flag.String("generate-key", "", "独占创建 Ed25519 私钥并打印公钥")
@@ -143,13 +155,20 @@ func main() {
 		os.Exit(1)
 	}
 	defer client.Close()
+	maint, err := maintenance.New(config.MaintenanceEnabled, config.ReportURL+"\n"+util.PublicKeyString(key))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	client.SetMessageHandler(maint.Handle)
 
 	// 监听中断信号，触发优雅退出
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() { defer wg.Done(); maint.Run(ctx, client) }()
 
 	go service.ReportSystemInfo(ctx, client, config.Interval, config.IsDebug, &wg)
 	go service.ReportSystemUsage(ctx, client, config.Paths, config.InterfaceNames, config.Interval, config.IsDebug, &wg)

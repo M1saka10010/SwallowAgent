@@ -19,3 +19,4 @@ privateKeyPath: /opt/swallow-agent/agent.key
 devMode: false
 # 调试模式
 isDebug: false
+maintenanceEnabled: false
